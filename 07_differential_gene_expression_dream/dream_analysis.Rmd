@@ -1,0 +1,102 @@
+---
+title: "Embryos: Differential gene expression analysis using `dream`"
+author: "Deepak Tanwar"
+date: "<b>Created on:</b> 2020-04-09 <br> <b>Updated on:</b> `r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: tango
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    keep_md: no
+    number_sections: no
+    fig_width: 8
+    fig_height: 8
+    fig_caption: true
+    df_print: paged
+    code_folding: show
+  fontsize: 12pt
+  geometry: margin=1in
+  documentclass: article
+# bibliography: references.bib
+link-citations: yes
+---
+
+# Packages required
+```{r 20200409-dream-analysis-1, warning=FALSE, message=FALSE}
+library(variancePartition)
+library(edgeR)
+library(limma)
+library(SummarizedExperiment)
+library(DT)
+```
+
+# SE
+```{r 20200409-dream-analysis-2 }
+se <- readRDS("input/embryo.SE.rds")
+```
+
+# Filter
+```{r 20200409-dream-analysis-3 }
+counts <- assay(se)
+rows <- apply(counts, 1, FUN = function(x) sum(x >= 15) >= floor(length(x) * 0.4))
+
+se <- se[rows, ]
+```
+
+# Data and metadata
+```{r 20200409-dream-analysis-4, warning=FALSE}
+# Standard usage of limma/voom
+geneExpr <- DGEList(assay(se))
+geneExpr <- calcNormFactors(geneExpr)
+
+# Specify parallel processing parameters
+# this is used implicitly by dream() to run in parallel
+param <- SnowParam(detectCores(), "SOCK", progressbar = TRUE)
+register(param)
+
+# Metadata
+metadata <- data.frame(colData(se))
+metadata <- data.frame(SamplesID = rownames(metadata), metadata)
+```
+
+```{r 20200409-dream-analysis-5}
+metadata %>% datatable(rownames = F)
+```
+
+# `dream` analysis
+```{r 20200409-dream-analysis-6}
+# The variable to be tested must be a fixed effect
+form <- ~ batch + group + (1 | stage) + (1 | father)
+
+# estimate weights using linear mixed model of dream
+vobjDream <- voomWithDreamWeights(geneExpr, form, metadata)
+
+# Fit the dream model on each gene
+# By default, uses the Satterthwaite approximation for the hypothesis test
+fitmm <- dream(vobjDream, form, metadata)
+
+head(fitmm$design)
+
+table <- topTable(fitmm, coef = "groupMSUS", number = Inf)
+res <- data.frame(
+  data.frame(rowData(se))[rownames(table), ],
+  table
+)
+```
+
+# Save results
+```{r 20200409-dream-analysis-7 }
+writexl::write_xlsx(
+  x = res, path = "output/embryos_diff_analysis_results_dream.xlsx",
+  col_names = T, format_headers = T
+)
+rowData(se) <- DataFrame(res[rownames(se), ])
+saveRDS(object = se, file = "output/se_with_dea.rds")
+```
+
+# SessionInfo
+```{r 20200409-dream-analysis-8 }
+devtools::session_info()
+```
